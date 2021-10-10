@@ -1,0 +1,153 @@
+library(tidyr)
+library(dplyr)
+##-----------------------
+housing_train <- read.csv("F:\\Edvancer\\AdditionalDatasets\\AdditionalDatasets\\housing_train.csv",stringsAsFactors = F)
+housing_test <- read.csv("F:\\Edvancer\\AdditionalDatasets\\AdditionalDatasets\\housing_test.csv",stringsAsFactors = F)
+
+glimpse(housing_train)
+
+glimpse(housing_test)
+
+##add Response variable in test data
+housing_test$Price=NA
+
+##check dimensions of train and test data
+dim(housing_test)
+##and 
+dim(housing_train)
+
+housing_test$data="test"
+housing_train$data='train'
+
+##------------combine train and test data
+housing_all <- rbind(housing_train,housing_test)
+glimpse(housing_all)
+
+##----------checking first categoricl variable
+
+row.names(table(housing_all$Suburb))
+
+##-----------Create Dummies for the categorical variables
+CreateDummies <- function(data,var,freq_cutoff=0){
+  
+  t=table(data[,var])
+  t=t[t>freq_cutoff]
+  t=sort(t)
+  categories=names(t)[-1]
+  
+  for (cat in categories) {
+    name=paste(var,cat,sep = "_")
+    name=gsub(" ","",name)
+    name=gsub("-","_",name)
+    name=gsub("\\?","Q",name)
+    name=gsub(">","GT_",name)
+    name=gsub("<","LT_",name)
+    name=gsub("\\+","",name)
+    name=gsub("\\/","",name)
+    name=gsub("=","EQ_",name)
+    name=gsub(",","",name)
+    data[,name]=as.numeric(data[,var]==cat)
+    
+  }
+  data[,var]=NULL
+  return(data)
+}
+
+##------convert Type variable into numeric 
+housing_all <- housing_all %>% 
+  mutate(Type_h=as.numeric(Type=='h'),Type_t=as.numeric(Type=="t"),Type_u=as.numeric(Type=="u")) %>% 
+  select(-Type)
+
+##----number of categorical variables
+names(housing_all)[sapply(housing_all,is.character)]
+
+cat_cols=c("Suburb","Method","SellerG","CouncilArea")
+
+##-----drop Address variable
+housing_all$Address=NULL
+
+##converting categorical variable into numeric by using Dummies
+
+housing_all <- CreateDummies(housing_all,"Suburb",100)
+
+##----droping sellerG variable
+housing_all <- housing_all %>% select(-SellerG)
+
+##----Creating Dummies for CouncilArea and Method
+
+housing_all <- CreateDummies(housing_all,"CouncilArea",600)
+
+housing_all <- CreateDummies(housing_all,"Method",50)
+
+##----Checking NA's
+colSums(is.na(housing_all))
+lapply(housing_all,function(x) sum(is.na(x)))
+
+for(col in names(housing_all)){
+  if(sum(is.na(housing_all[,col]))>0 & !(col %in% c("data","Price"))){
+    housing_all[is.na(housing_all[,col]),col]=mean(housing_all[housing_all$data=="train",col],na.rm = T)
+  }
+}
+##-----preparing data done now split the data
+
+housing_train <- housing_all %>% filter(data=='train') %>% select(-data)
+housing_test <- housing_all %>% filter(data=='test') %>% select(-data,-Price)
+
+##------Break train data into two
+set.seed(2)
+s=sample(1:nrow(housing_train),0.7*nrow(housing_train))
+
+housing_train1=housing_train[s,]
+housing_train2=housing_train[-s,]
+
+##----------------------------------------------------------------------------
+
+fit <- lm(Price~ .-Type_u,data = housing_train1)
+
+library(car)
+vif(fit)
+##Error in vif.default(fit) : there are aliased coefficients in the model
+sort(vif(fit),decreasing = T)[1:3]
+
+##-----vif is under control now check with p-values
+fit <- step(fit)
+
+summary(fit)
+
+formula(fit)
+
+fit=lm(Price ~ Rooms + Distance + Postcode + Bedroom2 + Bathroom + Car + 
+         Landsize + BuildingArea + YearBuilt + Type_h + Type_t + Suburb_Doncaster
+          + Suburb_Thornbury + Suburb_Hampton + Suburb_Balwyn + 
+         Suburb_MalvernEast + Suburb_Camberwell + Suburb_PortMelbourne + 
+         Suburb_BrightonEast + Suburb_Hawthorn + Suburb_BalwynNorth + 
+         Suburb_Kew + Suburb_Brighton + Suburb_GlenIris + Suburb_Essendon + 
+         Suburb_SouthYarra + Suburb_StKilda + Suburb_Preston + Suburb_Richmond + 
+         Suburb_Reservoir + CouncilArea_Darebin + CouncilArea_Moreland + 
+         CouncilArea_Boroondara + CouncilArea_ + Method_SP + Method_S,data = housing_train1)
+
+final.fit <- fit <- lm(Price ~. -Type_u,data = housing_train)
+final.fit=step(final.fit)
+
+summary(final.fit)
+
+formula(final.fit)
+final.fit <- lm(Price ~ Rooms + Distance + Postcode + Bedroom2 + Bathroom + Car + 
+                  Landsize + BuildingArea + YearBuilt + Type_h + Type_t + Suburb_Doncaster + 
+                  Suburb_AscotVale + Suburb_Thornbury + Suburb_Hampton + Suburb_Balwyn + 
+                  Suburb_MalvernEast + Suburb_Camberwell + Suburb_PortMelbourne + 
+                  Suburb_BrightonEast + Suburb_Hawthorn + Suburb_BalwynNorth + 
+                  Suburb_Coburg + Suburb_Kew + Suburb_Brighton + Suburb_GlenIris + 
+                  Suburb_Essendon + Suburb_SouthYarra + Suburb_StKilda + Suburb_Preston + 
+                  Suburb_Richmond + Suburb_Reservoir + CouncilArea_Darebin + 
+                  CouncilArea_Moreland + CouncilArea_Boroondara + CouncilArea_ + 
+                  Method_SP + Method_PI + Method_S,data = housing_train)
+
+summary(final.fit)
+
+val.pred=predict(fit,newdata = housing_train)
+errors <- housing_train$Price - val.pred
+rmse <- errors**2 %>% mean() %>% sqrt()
+Score = 212467/rmse
+
+
