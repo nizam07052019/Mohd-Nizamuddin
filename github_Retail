@@ -1,0 +1,192 @@
+##------Adding Needed Libraries 
+
+library(dplyr)
+library(gbm)
+library(randomForest)
+library(ggplot2)
+library(cvTools)
+library(tidyr)
+library(tree)
+library(car)
+
+##------Let's Start
+store_train <- read.csv("F:\\Edvancer\\AdditionalDatasets\\AdditionalDatasets\\store_train.csv",stringsAsFactors = F)
+
+store_test <- read.csv("F:\\Edvancer\\AdditionalDatasets\\AdditionalDatasets\\store_test.csv",stringsAsFactors = F)
+
+glimpse(store_train)
+glimpse(store_test)
+##---------Add response variable to the test data
+store_test$store=NA
+dim(store_test)
+dim(store_train)
+
+##-------add data into the train and test data
+
+store_test$data='test'
+store_train$data='train'
+
+##-------combine train and test data
+
+store_all <- rbind(store_train,store_test)
+
+glimpse(store_all)
+
+##-------to know the character variable
+cat_var=names(store_all)[sapply(store_all,is.character)]
+
+cat_var
+
+##-------Drop countytownname becoz it has more unique values
+##---------Drop Areaname, storecode and countyname 
+
+##store_all$countytownname==NULL
+
+store_all <- store_all %>%
+  select(-countytownname,-storecode,-Areaname,-countyname)
+
+##---------Creating Dummies for rest of the categorical variables
+
+CreateDummies=function(data,var,freq_cutoff=0){
+  
+  t=table(data[,var])
+  t=t[t>freq_cutoff]
+  t=sort(t)
+  categories=names(t)[-1]
+  
+  
+  for( cat in categories){
+    name=paste(var,cat,sep="_")
+    name=gsub(" ","",name)
+    name=gsub("-","_",name)
+    name=gsub("\\?","Q",name)
+    name=gsub("<","LT_",name)
+    name=gsub("\\+","",name)
+    name=gsub("\\/","_",name)
+    name=gsub(">","GT_",name)
+    name=gsub("=","EQ_",name)
+    name=gsub(",","",name)
+  
+      data[,name]=as.numeric(data[,var]==cat)
+      
+  }
+  
+  data[,var]=NULL
+  return(data)
+}
+
+##----convert categorical variables to numeric
+
+cat_var=names(store_all)[sapply(store_all,is.character)]
+cat_var
+
+cat_col <- c('country','State','state_alpha')
+
+
+for (cat in cat_col) {
+  store_all=CreateDummies(store_all,cat,50)
+}
+
+glimpse(store_all)
+
+  store_all <- store_all %>%
+  mutate(grocery_store=as.numeric(store_Type=='Grocery Store'),
+  supermarket_T1=as.numeric(store_Type=='Supermarket Type1'),
+  supermarket_T2=as.numeric(store_Type=='Supermarket Type2'),
+  supermarket_T3=as.numeric(store_Type=='Supermarket Type3'))%>% 
+  select(-store_Type)
+
+##_______looking for NA's
+
+lapply(store_all,function(x) sum(is.na(x)))
+
+##------imputing NA's 
+
+for(col in names(store_all)){
+  if(sum(is.na(store_all[,col]))>0 & !(col %in% c("data","store"))){
+    store_all[is.na(store_all[,col]),col]=mean(store_all[store_all$data=="train",col],na.rm=T)
+  }
+}
+
+##store_all$store <- as.factor(store_all$store)
+
+
+ ##------------seperating test and train data
+
+store_train <- store_all %>% filter(data=='train') %>% select(-data)
+store_test <- store_all %>% filter(data=='test') %>% select(-data,-store)
+
+set.seed(2)
+s=sample(1:nrow(store_train),0.8*nrow(store_train))
+store_train1 <- store_train[s,]
+store_train2 <- store_train[-s,]
+
+##----------Random Forest---------
+
+param=list(interaction.depth=c(1:7),
+           n.trees=c(50,100,200,500,700),
+           shrinkage=c(.1,.01,.001),
+           n.minobsinnode=c(1,2,5,10))
+
+library(pROC)
+mycost_auc=function(y,yhat){
+  roccurve=pROC::roc(y,yhat)
+  score=pROC::auc(roccurve)
+  return(score)
+}
+
+
+subset_paras=function(full_list_para,n=10){
+  all_comb=expand.grid(full_list_para)
+  s=sample(1:nrow(all_comb),n)
+  subset_para=all_comb[s,]
+  return(subset_para)
+}
+
+num_trials=20
+my_params=subset_paras(param,num_trials)
+my_params
+
+myauc=0
+
+for(i in 1:num_trials){
+  print(paste('starting iteration :',i))
+  # uncomment the line above to keep track of progress
+  params=my_params[i,]
+  k=cvTuning(gbm,store~.,
+             data =store_train,
+             tuning =params,
+             args=list(distribution="bernoulli"),
+             folds = cvFolds(nrow(store_train), K=10, type ="random"),
+             cost =mycost_auc, seed =2,
+             predictArgs = list(type="response",n.trees=params$n.trees)
+  )
+  score.this=k$cv[,2]
+  if(score.this>myauc){
+    print(params)
+    # uncomment the line above to keep track of progress
+    myauc=score.this
+    print(myauc)
+    # uncomment the line above to keep track of progress
+    best_params=params
+  }
+  print('DONE')
+  # uncomment the line above to keep track of progress
+}
+ 
+myauc
+
+best_params
+
+store.gbm.final <- gbm(store~.,data = store_train,
+                       n.trees = best_params$n.trees,
+                       n.minobsinnode = best_params$n.minobsinnode,
+                       shrinkage = best_params$shrinkage,
+                       interaction.depth = best_params$interaction.depth,
+                       distribution = 'bernoulli')
+
+test.score=predict(store.gbm.final,
+                   newdata = store_test,type = 'response',
+                   n.trees = best_params$n.trees)
+
+write.csv(test.score,"mysubmissionP2.csv",row.names = F)
